@@ -6,8 +6,8 @@
 
 ## 目录
 
-- [第1章 权衡的艺术](https://github.com/JungleHico/vue-principle-note/blob/master/docs/第1章%20权衡的艺术.md)
+- [第1章 权衡的艺术](https://github.com/JungleHico/vue-design-note/blob/master/docs/第1章%20权衡的艺术.md)
 
-- [第2章 框架（Vue.js）设计的核心要素](https://github.com/JungleHico/vue-principle-note/blob/master/docs/第2章%20框架（Vue.js）设计的核心要素.md)
+- [第2章 框架（Vue.js）设计的核心要素](https://github.com/JungleHico/vue-design-note/blob/master/docs/第2章%20框架（Vue.js）设计的核心要素.md)
 
-- [第3章 Vue.js 3 的设计思路](https://github.com/JungleHico/vue-principle-note/blob/master/docs/第3章%20Vue.js%203%20的设计思路.md)
+- [第3章 Vue.js 3 的设计思路](https://github.com/JungleHico/vue-design-note/blob/master/docs/第3章%20Vue.js%203%20的设计思路.md)
