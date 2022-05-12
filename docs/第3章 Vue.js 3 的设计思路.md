@@ -160,7 +160,7 @@ export default {
 
 最后，渲染器会将渲染函数返回的虚拟 DOM 转换为真实 DOM。
 
-<div style="display: flex; justify-content: space-between;">
+<div style="width: 100%; display: flex; justify-content: space-between;">
     <a href="https://github.com/JungleHico/vue-design-note/blob/master/docs/第2章%20框架（Vue.js）设计的核心要素.md">←第2章 框架（Vue.js）设计的核心要素</a>
     <span></span>
 </div>
