@@ -36,3 +36,8 @@
 **5. 提供统一的错误处理接口（`app.config.errorHandler`）**
 
 **6. 良好的 TypeScript 支持**
+
+<div style="display: flex; justify-content: space-between;">
+   <a href="https://github.com/JungleHico/vue-design-note/blob/master/docs/第1章%20权衡的艺术.md">←第1章 权衡的艺术</a>
+   <a href="https://github.com/JungleHico/vue-design-note/blob/master/docs/第3章%20Vue.js%203%20的设计思路.md">第3章 Vue.js 3 的设计思路→</a>
+</div>
