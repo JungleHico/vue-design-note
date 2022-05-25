@@ -1,48 +1,46 @@
-# 第3章 Vue.js 的设计思路
+# 第 3 章 Vue.js 的设计思路
 
 ## 1. 声明式描述 UI
 
 1. 模板语法（**编译时**）
-   
+
    Vue.js 为用户提供模板语法来声明式描述 UI，例如：文本插值、指令、`v-bind` 或 `:` 来动态绑定指令、`v-on` 或 `@` 来绑定事件等，框架内部通过 `Complier` 编译成虚拟 DOM，这种方式对用户来说更加直观，这种方式编写的框架属于**编译时**框架。
 
 2. 渲染函数（**运行时**）
-   
+
    Vue.js 还为用户提供另一种描述 UI 的方式：渲染函数。这种方式通过使用 JavaScript 对象来描述 DOM 结构，也就是虚拟 DOM。使用 JavaScript 对象会比模板语法更加灵活，而且也不需要经过编译，这种方式编写的框架属于**运行时**框架。
-   
+
    模板语法：
-   
+
    ```html
    <div @click="handler">
-       <span>text</span>
+     <span>text</span>
    </div>
    ```
-   
+
    JavaScript 对象（虚拟 DOM）：
-   
+
    ```js
    const title = {
-       // 标签名称
-       tag: 'div',
-       // 标签属性
-       props: {
-           onClick: handler
-       },
-       // 子节点
-       children: [
-           { tag: 'span', children: 'text' }
-       ]
+     // 标签名称
+     tag: 'div',
+     // 标签属性
+     props: {
+       onClick: handler
+     },
+     // 子节点
+     children: [{ tag: 'span', children: 'text' }]
    }
    ```
-   
+
    Vue.js 中，组件的 `redner()` 函数就是用来描述虚拟 DOM 的，除此之外，Vue.js 还提供了 工具函数 `h()` ，用来简化虚拟 DOM 的书写：
-   
+
    ```js
    import { h } from 'vue'
    export default {
-       render() {
-           return h('div', { onClick: handler }, { tag: 'span', children: 'text' })
-       }
+     render() {
+       return h('div', { onClick: handler }, { tag: 'span', children: 'text' })
+     }
    }
    ```
 
@@ -81,38 +79,34 @@ const vnode = {
  * @params container {HTMLElement} 挂载的节点
  */
 function renderer(vnode, container) {
-    // 1. 创建节点
-    const el = document.createElement(vnode.tag)
+  // 1. 创建节点
+  const el = document.createElement(vnode.tag)
 
-    // 2. 为节点添加属性和事件
-    for (const key in vnode.props) {
-        if (/^on/.test(key)) {
-            // 以on开头，说明是事件
-            el.addEventListener(
-                key.substr(2).toLowerCase(),
-                vnode.props[key]
-            )
-        } else {
-            // 添加属性
-            el.setAttribute(key, vnode.props[key])
-        }
+  // 2. 为节点添加属性和事件
+  for (const key in vnode.props) {
+    if (/^on/.test(key)) {
+      // 以on开头，说明是事件
+      el.addEventListener(key.substr(2).toLowerCase(), vnode.props[key])
+    } else {
+      // 添加属性
+      el.setAttribute(key, vnode.props[key])
     }
+  }
 
-    // 3. 处理子节点
-    if (typeof vnode.children === 'string') {
-        // 文本
-        el.innerText = vnode.children
-    } else if (Array.isArray(vnode.children)) {
-        // 递归渲染子节点
-        vnode.children.forEach(child => {
-            renderer(child, el)
-        })
-    }
+  // 3. 处理子节点
+  if (typeof vnode.children === 'string') {
+    // 文本
+    el.innerText = vnode.children
+  } else if (Array.isArray(vnode.children)) {
+    // 递归渲染子节点
+    vnode.children.forEach((child) => {
+      renderer(child, el)
+    })
+  }
 
-    // 4. 挂载节点
-    container.appendChild(el)
+  // 4. 挂载节点
+  container.appendChild(el)
 }
-
 
 renderer(vnode, document.body)
 ```
@@ -125,20 +119,18 @@ renderer(vnode, document.body)
 
 ```html
 <template>
-    <div @click="handler">
-        click me
-    </div>
+  <div @click="handler">click me</div>
 </template>
 
 <script>
-export default {
+  export default {
     data() {
-        return {}
+      return {}
     },
     methods: {
-        handler() {}
+      handler() {}
     }
-}
+  }
 </script>
 ```
 
@@ -146,18 +138,20 @@ export default {
 
 ```js
 export default {
-    data() {
-        return {}
-    },
-    methods: {
-        handler() {}
-    },
-    render() {
-        return h('div', { onClick: handler }, 'click me')
-    }
+  data() {
+    return {}
+  },
+  methods: {
+    handler() {}
+  },
+  render() {
+    return h('div', { onClick: handler }, 'click me')
+  }
 }
 ```
 
 最后，渲染器会将渲染函数返回的虚拟 DOM 转换为真实 DOM。
 
-[第2章 框架（Vue.js）设计的核心要素↑](https://github.com/JungleHico/vue-design-note/blob/master/docs/第2章%20框架（Vue.js）设计的核心要素.md)
+[第 2 章 框架（Vue.js）设计的核心要素 ↑](./第2章%20框架（Vue.js）设计的核心要素.md)
+
+[第 4 章 响应式系统的作用与实现 ↓](./第4章%20响应式系统的作用与实现.md)

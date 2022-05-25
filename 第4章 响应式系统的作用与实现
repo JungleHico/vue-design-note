@@ -1,0 +1,867 @@
+# 第 4 章 响应式系统的作用与实现
+
+## 1. 响应式数据与副作用函数
+
+**副作用函数**
+
+副作用函数，指的是执行时会直接或简介影响其他函数的执行，例如一个函数修改了全局变量，那么这个函数就产生了副作用。
+
+**响应式数据**
+
+假设在一个副作用函数中读取了某个对象的属性，当我们修改这个这个属性时，如果副作用函数会重新执行，那么这个对象就是响应式数据。
+
+```js
+const obj = { text: 'hello world' }
+function effect() {
+  document.body.innerText = obj.text
+}
+
+effect()
+obj.text = 'hello vue3'
+```
+
+当我们修改 `obj.text`，如果副作用函数 `effect()` 会重新执行，那么 `obj` 就是响应式数据，当然，现在我们修改 `obj.text` 是不会有变化的。
+
+## 2. 响应式数据的基本实现
+
+上一节的例子中，副作用函数 `effect()` 执行时会触发 `obj.text` 的**读取**操作；修改 `obj.text` 时就会触发**设置**操作。因此，拦截对象属性的读取和设置操作，就能实现响应式数据。
+
+Vue 2 中使用 `Object.defineProperty()` 来实现对对象属性的读取和设置，Vue 3 中采用 ES6 的 Proxy 语法。使用 `Object.defineProperty()` 的缺点：
+
+- 需要对每个对象属性进行监听，如果属性值也是对象则需要继续对对象的属性进行监听，相较于 Proxy 直接劫持对象，性能和使用体验是不及 Proxy 的；
+- 在 Vue 2 中，直接修改数组元素是不能被劫持的，Vue 2 只对 `push()`、`pop()` 等数组方法进行了劫持。
+
+使用 Proxy 劫持对象：
+
+```js
+// 原始数据
+const data = { text: 'hello world' }
+// 存储副作用函数的桶
+const bucket = new Set()
+
+// 创建响应式数据
+function reactive(data) {
+  // 对原始数据的代理
+  const proxy = new Proxy(data, {
+    // 拦截读取操作
+    get(target, key) {
+      // 将副作用函数添加到桶中
+      bucket.add(effect)
+      return target[key]
+    },
+    // 拦截设置操作
+    set(target, key, newVal) {
+      target[key] = newVal
+      // 从桶中取出副作用函数并执行
+      bucket.forEach((fn) => {
+        fn()
+      })
+      return true
+    }
+  })
+
+  return proxy
+}
+
+// 创建响应式数据
+const reactiveData = reactive(data)
+// 创建副作用函数
+const effect = () => {
+  document.body.innerText = reactiveData.text
+}
+// 执行副作用函数，触发读取
+effect()
+// 1秒后修改响应式数据
+setTimeout(() => {
+  reactiveData.text = 'hello vue3'
+}, 1000)
+```
+
+## 3. 设计一个完善的响应式系统
+
+上一节设计的响应式数据还不够完善，存在以下问题：
+
+- 副作用函数的名字（`effect`）写死了；
+- 没有区分不同的响应式对象，副作用函数和被操作字段之间也没有明确的联系。
+
+**问题一**
+
+为了解决副作用函数的名字硬编码的问题，我们可以定义一个函数，用于注册副作用函数：
+
+```js
+// 记录当前副作用函数的全局变量
+let activeEffect = null
+// 注册副作用函数的函数
+function effect(fn) {
+  activeEffect = fn
+  // 执行副作用函数
+  fn()
+}
+```
+
+然后就可以注册并执行副作用函数：
+
+```js
+effect(() => {
+  document.body.innerText = reactiveData.text
+})
+```
+
+这里我们注册了一个匿名的副作用函数，全局变量`activeEffect` 会记录当前的副作用函数，接着副作用函数会执行，由于副作用函数读取响应式数据的属性，代理对象的 `get()` 函数就会被触发：
+
+```diff
+  function reactive(data) {
+    const proxy = new Proxy(data, {
+      get(target, key) {
+-       bucket.add(effect)
++       // 将当前副作用函数装入桶中
++       if (activeEffect) {
++         bucket.add(activeEffect)
++       }
+        return target[key]
+      },
+      set(target, key, newVal) {
+        target[key] = newVal
+        bucket.forEach((fn) => {
+          fn()
+        })
+        return true
+      }
+    })
+
+    return proxy
+  }
+```
+
+**问题二**
+
+之前的响应式数据还有个问题，**没有区分不同的响应式对象**，所有响应式对象的副作用函数都存放在同一个 `bucket` 中。除此之外， **副作用函数和被操作字段之间也没有明确的联系**，换言之，当我们修改响应式数据的某个属性时，`bucket` 中的所有副作用函数都会执行一遍，这是不符合我们预期的，我们希望修改某个属性值的时候，只执行该属性相关的副作用函数。
+
+为了解决以上两个问题，我们修改桶的数据结构：
+
+1. `Set()`，存储副作用函数的集合。
+2. `Map(key: string, set: Set)`，`Map` 的键是对象的属性，值是存储副作用函数的 `Set`，也就是为对象不同的属性分别创建不同的副作用函数集合，作用是**区分对象不同的属性**。
+3. `WeakMap(target: object, map: Map)`，`WeakMap` 的键是原始对象 `target`，值是上面的 `Map`，作用是**区分不同的对象**。这里使用 `WeakMap` 是因为 `WeakMap` 对 key 是弱引用，方便我们的对象在没有被引用时被垃圾回收器回收。
+
+修改数据结构后的代码：
+
+```js
+let activeEffect = null
+function effect(fn) {
+  activeEffect = fn
+  fn()
+}
+
+// 存储所有响应式对象的副作用函数
+const reactiveMap = new WeakMap()
+
+function reactive(data) {
+  const proxy = new Proxy(data, {
+    get(target, key) {
+      track(target, key)
+      return target[key]
+    },
+    set(target, key, newVal) {
+      target[key] = newVal
+      trigger(target, key)
+    }
+  })
+
+  return proxy
+}
+// 添加副作用函数
+function track(target, key) {
+  // 当前没有副作用函数，返回
+  if (!activeEffect) return
+  // 获取当前对象的所有副作用函数，如果没有当前对象则创建
+  let targetMap = reactiveMap.get(target)
+  if (!targetMap) {
+    targetMap = new Map()
+    reactiveMap.set(target, targetMap)
+  }
+  // 获取当前属性的所有副作用函数，如果没有当前属性则创建
+  let keyMap = targetMap.get(key)
+  if (!keyMap) {
+    keyMap = new Set()
+    targetMap.set(key, keyMap)
+  }
+  // 添加当前副作用函数
+  keyMap.add(activeEffect)
+}
+// 取出当前对象属性的所有副作用函数并执行
+function trigger(target, key) {
+  let targetMap = reactiveMap.get(target)
+  if (!targetMap) return
+  const effects = targetMap.get(key)
+  effects.forEach((fn) => {
+    fn()
+  })
+}
+
+const reactiveData = new reactive({ text: 'hello world' })
+effect(() => {
+  document.body.innerText = reactiveData.text
+})
+setTimeout(() => {
+  reactiveData.text = 'hello vue3'
+}, 1000)
+```
+
+## 4. 分支切换与 cleanup
+
+**分支切换与遗留的副作用函数**
+
+```js
+const reactiveData = new reactive({ ok: true, text: 'hello world' })
+effect(() => {
+  document.body.innerText = reactiveData.ok ? reactiveData.text : 'not'
+})
+```
+
+上面代码中，副作用函数内部存在一个三元表达式，当 `reactiveData.ok` 的值发生变化时，代码执行的分支也会跟着变化，这就是所谓的分支切换。
+
+分支切换可能会产生遗留的副作用函数，遗留的副作用函数会导致不必要的更新。上面的代码执行时，由于 `reactiveData.ok` 的值为 `true`，`reactiveMap` 会分别记录 `reactiveData.ok` 和 `reactiveData.text` 这两个属性的副作用函数。然后，如果我们执行以下代码：
+
+```js
+reactiveData.ok = false
+reactiveData.text = 'hello vue3'
+```
+
+改变 `reactiveData.ok` 的值，`reactiveData.ok` 对应的副作用函数重新执行，分支也随之切换，不再读取 `reactiveData.text` 的值，理想状态下， 继续修改 `reactiveData.text` 的值，不应该执行对应的副作用函数，然而事实上，当我们继续修改 `reactiveData.text` 的值，遗留的副作用函数仍然会重新执行。
+
+**cleanup**
+
+解决以上问题的思路：每次执行副作用函数时，可以先把它从所有与之关联的依赖集合中删除，这样，当所有副作用函数执行完毕后，就会重新建立联系，但新的联系中不会包含遗留的副作用函数。
+
+要将一个副作用函数从与之关联的依赖集合中删除，就需要明确知道哪些依赖包含它，为此，我们设计一个类 `ReactiveEffect`：
+
+```js
+let activeEffect = null
+class ReactiveEffect {
+  constructor(fn) {
+    this.fn = fn
+    this.deps = [] // 保存与其当前副作用函数关联的依赖集合
+  }
+  // 执行副作用函数
+  run() {
+    activeEffect = this
+    this.fn()
+  }
+}
+```
+
+```diff
+  // 注册并执行副作用函数
+  function effect(fn) {
+-   activeEffect = effectFn
+-   fn()
++   const _effect = new ReactiveEffect(fn)
++   _effect.run()
+  }
+```
+
+`ReactiveEffect` 是对副作用函数的封装，`fn` 表示副作用函数本身，`deps` 是一个数组，存储所有包含当前副作用函数的依赖集合，当我们需要执行副作用函数时，则调用实例的 `run()` 方法。
+
+然后，修改 `track()` 函数：
+
+```diff
+  // 添加副作用函数
+  function track(target, key) {
+    if (!activeEffect) return
+    let targetMap = reactiveMap.get(target)
+    if (!targetMap) {
+      targetMap = new Map()
+      reactiveMap.set(target, targetMap)
+    }
+    let keyMap = targetMap.get(key)
+    if (!keyMap) {
+      keyMap = new Set()
+      targetMap.set(key, keyMap)
+    }
+    keyMap.add(activeEffect)
++   // 将包含当前副作用函数的依赖集合添加到副作用函数的 .deps 中
++   activeEffect.deps.push(keyMap)
+  }
+```
+
+`track()` 函数执行完后，副作用函数的 `.deps` 就记录了与它关联的依赖集合的信息，这样，每次副作用函数执行时，就可以将副作用函数从依赖集合中删除：
+
+```diff
+  class ReactiveEffect {
+    constructor(fn) {
+      this.fn = fn
+      this.deps = [] // 保存与其当前副作用函数关联的依赖集合
+    }
+    // 执行副作用函数
+    run() {
++     // 每次执行副作用函数前，将其从关联的依赖集合中删除
++     cleanupEffect(this)
+      activeEffect = this
+      this.fn()
+    }
+  }
+```
+
+```js
+function cleanupEffect(effect) {
+  const { deps } = effect
+  for (let i = 0; i < deps.length; i++) {
+    deps[i].delete(effect)
+  }
+}
+```
+
+这样，就可以避免产生遗留的副作用函数了，然而现在 `trigger（）` 中会无限循环，原因是我们遍历依赖集合，并执行副作用时，先进行了 cleanup，将当前副作用函数清除，然后副作用的执行又会导致该副作用函数重新添加到依赖集合中，这就导致遍历时出现了死循环。解决的办法就是创建并遍历一个新数组或者新集合：
+
+```diff
+// 取出当前对象属性的所有副作用函数并执行
+  function trigger(target, key) {
+    let targetMap = reactiveMap.get(target)
+    if (!targetMap) return
+    const effects = targetMap.get(key)
+-   effects.forEach((fn) => {
+-     fn()
+-   })
++   triggerEffects(effects)
+  }
+```
+
+```js
+function triggerEffects(effects) {
+  for (const effect of [...effects]) {
+    effect.run()
+  }
+}
+```
+
+## 5. 嵌套 effect 与 effect 栈
+
+略。
+
+## 6. 避免无限递归循环
+
+之前的响应式系统还存在这无限递归循环的问题，例如：
+
+```js
+const obj = reactive({ count: 0 })
+effect(() => {
+  obj.count++
+})
+```
+
+执行上面的代码，会引起栈溢出，原因是副作用函数中有自增操作 `obj.count++` ，自增操作可以拆分为：
+
+```js
+obj.count = obj.count + 1
+```
+
+这段代码中同时包含了对 `obj.count` 的读取和设置操作。执行这段代码时，先读取 `obj.count` ，触发 `track()` 函数，将当前副作用函数添加到依赖集合中，然后将加 1 后的结果赋值给 `obj.count`，触发了 `trigger()` 函数，从依赖集合中取出当前副作用函数并执行。此时，当前副作用函数还没执行完毕，就开始下一次执行，就会产生无限递归的问题。
+
+解决上述问题的思路是：**当 `trigger()` 函数触发时，如果从依赖集合中取出的副作用函数和当前副作用函数相同，则不触发执行。**
+
+```diff
+  class ReactiveEffect {
+    constructor(fn, scheduler = null) {
+      this.fn = fn
+      this.scheduler = scheduler
+      this.deps = [] // 保存与其当前副作用函数关联的依赖集合
+    }
+    run(key) {
+      // 每次运行副作用函数前，将其从关联的依赖集合中删除
+      cleanupEffect(this)
+      activeEffect = this
+      this.fn()
++     activeEffect = null // 副作用函数执行完，activeEffect置空
+    }
+  }
+```
+
+```diff
+// 取出当前对象属性的所有副作用函数并执行
+  function trigger(target, key) {
+    let targetMap = reactiveMap.get(target)
+    if (!targetMap) return
+    const effects = targetMap.get(key)
+    triggerEffects(effects, key)
+  }
+  function triggerEffects(effects, key) {
+    for (const effect of [...effects]) {
++     if (effect !== activeEffect) {
+        effect.run()
++     }
+    }
+  }
+```
+
+## 7. 调度执行
+
+可调度性指的是触发 `trigger()` 函数执行副作用函数时，可以决定副作用函数执行的时机、次数和方式。可调度性的实现思路：允许用户传入一个调度函数 `scheduler`，当触发 `trigger()` 函数执行副作用函数时，**检查是否传入调度函数 `scheduler`，如果有，则执行调度函数，如果没有，则按默认方式执行副作用函数。**
+
+```diff
+  class ReactiveEffect {
+-   constructor(fn) {
++   constructor(fn, scheduler = null) {
+      this.fn = fn
++     this.scheduler = scheduler
+      this.deps = [] // 保存与其当前副作用函数关联的依赖集合
+    }
+    run(key) {
+      // 每次运行副作用函数前，将其从关联的依赖集合中删除
+      cleanupEffect(this)
+      activeEffect = this
+      this.fn()
+      activeEffect = null
+    }
+  }
+- function effect(fn) {
+-   const _effect = new ReactiveEffect(fn)
+-   _effect.run()
+- }
++ function effect(fn, scheduler = null) {
++   const _effect = new ReactiveEffect(fn, scheduler)
++   _effect.run()
++ }
+```
+
+```diff
+  function triggerEffects(effects, key) {
+    for (const effect of [...effects]) {
+      if (effect !== activeEffect) {
++       if (effect.scheduler) {
++         effect.scheduler()
++       } else {
+          effect.run()
++       }
+      }
+    }
+  }
+```
+
+**改变执行顺序**
+
+```js
+const obj = new reactive({ count: 0 })
+effect(() => {
+  console.log(obj.count)
+})
+
+obj.count++
+console.log('end')
+```
+
+以上代码执行完，控制台打印：
+
+```bash
+1
+2
+end
+```
+
+假设我们想改变执行顺序，想要打印的结果是：
+
+```bash
+1
+end
+2
+```
+
+这时候就可以定义调度函数，通过 `setTimeout()` 函数将副作用函数加入到任务队列中，这样当触发 `trigger()` 函数，调用副作用函数时就不会立即执行。
+
+```js
+const obj = new reactive({ count: 1 })
+const effectFn = () => {
+  console.log(obj.count)
+}
+effect(effectFn, () => {
+  setTimeout(effectFn)
+})
+
+obj.count++
+console.log('end')
+```
+
+**改变执行次数**
+
+```js
+const obj = new reactive({ count: 1 })
+effect(() => {
+  console.log(obj.count)
+})
+
+obj.count++
+obj.count++
+```
+
+以上代码有两个自增操作，每次自增操作完成后都会打印，最终控制台的打印结果：
+
+```bash
+1
+2
+3
+```
+
+假设我们想改变执行次数，不希望打印中间结果：
+
+```bash
+1
+3
+```
+
+于是我们修改代码：
+
+```js
+const queue = new Set() // 任务队列
+let isFlushing = false // 当前队列是否正在刷新
+
+function queueFlush(job) {
+  queue.add(job) // 将当前副作用函数添加到队列中
+
+  if (!isFlushing) {
+    isFlushing = true
+    Promise.resolve() // 通过Promise添加微任务
+      .then(() => {
+        // 微任务执行副作用函数
+        queue.forEach((job) => job())
+      })
+      .finally(() => {
+        // 结束后重置状态
+        isFlushing = false
+      })
+  }
+}
+
+const obj = new reactive({ count: 1 })
+const effectFn = () => {
+  console.log(obj.count)
+}
+effect(effectFn, () => {
+  queueFlush(effectFn)
+})
+
+obj.count++
+obj.count++
+```
+
+首先定义一个任务队列 `queue`，这是一个 `Set`，原因是 `Set` 可以为我们剔除重复的副作用函数。另外，我们定义了一个状态变量 `isFlushing`，表示队列是否处于刷新状态。然后，我们定义一个调度函数，每次执行副作用函数前，先将副作用函数添加到队列中，然后检查 `isFlushing` 的值，通过 `Promise.resolve()` 添加微任务，在微任务执行完之前，`isFlushing` 的值都是 `false`，也就是不会为当前副作用函数添加新的微任务。当我们停止修改 `obj.count` 的值，也就是宏任务执行完之后，才会执行我们之前添加的微任务，从队列中取出副作用函数并执行。
+
+## 8. 计算属性 computed
+
+**一个基本的计算属性**
+
+基于之前的内容，我们可以实现 Vue.js 中的计算属性 `computed`。
+
+首先，改造 `ReactiveEffect` 的 `run()` 方法，我们需要拿到副作用函数的结果：
+
+```diff
+  class ReactiveEffect {
+    constructor(fn, scheduler = null) {
+      this.fn = fn
+      this.scheduler = scheduler
+      this.deps = []
+    }
+    run(key) {
+      cleanupEffect(this)
+      activeEffect = this
+-     this.fn()
++     cons res = this.fn()
+      activeEffect = null
++     return res
+    }
+  }
+```
+
+然后定义 `computed()` 方法：
+
+```js
+function computed(getter) {
+  const cRef = new ComputedRefImpl(getter)
+  return cRef
+}
+class ComputedRefImpl {
+  constructor(getter) {
+    this.effect = new ReactiveEffect(getter)
+  }
+  get value() {
+    return this.effect.run()
+  }
+}
+```
+
+`computed()` 方法接收一个 `getter()` 函数，然后我们创建一个 `ComputedRefImpl` 的实例 `cRef`，用来管理计算属性相关的内容，比如：我们对 `computed()` 接收的副作用函数 `getter()` 进行注册。然后，我们定义了一个 `value` 属性的 `get()` 方法，返回副作用函数的执行结果，这样，当我们读取计算属性的 `value` 值时，就能拿到副作用函数 `getter()` 的执行结果。
+
+```js
+const obj = new reactive({ count: 1 })
+const doubleCount = computed(() => {
+  return obj.count * 2
+})
+
+console.log(doubleCount.value)
+```
+
+**缓存计算结果**
+
+现在我们的计算属性能够拿到计算后的值，但是没有对计算结果进行缓存，即使我们不修改 `obj.count` 的值，多次读取 `doubleCount.value`，副作用函数仍然会多次执行。
+
+```diff
+  const obj = new reactive({ count: 1 })
+  const doubleCount = computed(() => {
++   console.log('getter函数执行啦！')
+    return obj.count * 2
+  })
+
+  console.log(doubleCount.value)
++ console.log(doubleCount.value)
+```
+
+上面的代码中，我们多次获取 `doubleCount.value`，副作用函数也执行了多次：
+
+```bash
+getter函数执行啦！ # 注册副作用函数时执行
+2
+getter函数执行啦！ # 重复获取计算属性时执行
+2
+```
+
+我们修改之前的代码，实现缓存计算结果：
+
+```js
+class ComputedRefImpl {
+  constructor(getter) {
+    this._value = undefined // 缓存计算结果
+    this._dirty = true // 当前数据是否为脏数据，也就是是否需要更新缓存
+    this.effect = new ReactiveEffect(getter, () => {
+      this._dirty = true // scheduler 调度函数，将 `_dirty` 重置为 true
+    })
+  }
+  get value() {
+    if (this._dirty) {
+      this._dirty = false
+      this._value = this.effect.run() // 更新缓存
+    }
+    return this._value
+  }
+}
+```
+
+首先定义两个变量：`_value` 和 `_dirty`。`_value` 用于缓存计算结果，`_dirty` 是一个标志，表示当前缓存数据是否为脏数据，为 `true` 时表示需要更新缓存。然后，每次读取计算属性时，判断是否需要更新缓存，如果是，则执行副作用函数更新缓存，否则直接使用缓存。除此之外，我们还为副作用函数指定了之前说过的调度函数 `scheduler`，当我们修改响应式数据并触发 `trigger()` 函数触时，会执行调度函数，将 `_dirty` 的值设为 `true`。
+
+```js
+const obj = new reactive({ count: 1 })
+const doubleCount = computed(() => {
+  console.log('getter函数执行啦！')
+  return obj.count * 2
+})
+
+console.log(doubleCount.value)
+console.log(doubleCount.value)
+obj.count++
+console.log(doubleCount.value)
+```
+
+这样，当我们重复读取计算属性时，副作用函数不会重复执行，只有当我们修改 `obj.count` 的值，才会更新缓存，重新执行副作用函数。
+
+```bash
+getter函数执行啦！
+2
+2
+getter函数执行啦！
+4
+```
+
+**手动追踪响应式数据**
+
+至此，我们实现了基本的计算属性以及缓存计算结果，但是还有一个问题：
+
+```js
+const obj = new reactive({ count: 1 })
+const doubleCount = computed(() => {
+  console.log('getter函数执行啦！')
+  return obj.count * 2
+})
+
+effect(() => {
+  console.log('副作用函数执行啦！')
+  console.log(doubleCount.value)
+})
+
+obj.count++ // 添加这句代码，不会打印新的内容
+```
+
+上述代码中，我们定义了一个响应式数据和计算属性，然后注册了一个副作用函数，该函数中读取计算属性的值，但是，当我们修改响应式数据，并不会触发副作用函数。
+
+我们在一个副作用函数中读取计算属性，相当于发生了 `effect` 嵌套，原本指向外部 `effect` 的 `activeEffect` 的值被计算属性内部的 `effect` 覆盖，所以外部的响应式数据就会丢失。解决的办法是：读取计算属性时，手动调用 `track()` 函数进行追踪；当计算属性依赖的响应式数据发生变化时，手动调用 `trigger()` 函数触发响应：
+
+```diff
+  class ComputedRefImpl {
+    constructor(getter) {
+      this._dirty = true
+      this._value = undefined
+      this.effect = new ReactiveEffect(getter, () => {
+        this._dirty = true
++       trigger(this, 'value') // 手动调用 trigger 函数触发响应
+      })
+    }
+    get value() {
++     track(this, 'value') // 手动调用 track 函数进行追踪
+      if (this._dirty) {
+        this._dirty = false
+        this._value = this.effect.run()
+      }
+      return this._value
+    }
+  }
+```
+
+## 9. watch 的实现原理
+
+**实现基本的 watch**
+
+`watch` 就是观测一个响应式数据，当数据发生变化时执行回调函数，这对应了 `effect` 副作用函数以及 `scheduler` 调度函数。要实现 watch，就要先注册一个副作用函数，该函数读取响应式数据的所有属性，这样，当改变响应式数据的某个属性时，就会触发 `trigger` 并执行副作用函数，此时，通过 `scheduler` 调度函数，我们就可以执行回调函数。
+
+```js
+/**
+ * @param source 响应式数据
+ * @param cb 回调函数
+ */
+function watch(source, cb) {
+  const effect = new ReactiveEffect(
+    // 副作用函数，读取响应式对象的属性
+    () => traverse(source),
+    // scheduler 调度函数，执行回调函数
+    () => {
+      cb()
+    }
+  )
+  effect.run()
+}
+/**
+ * @desc 递归读取响应式数据的属性
+ * @param value 要读取的属性
+ * @param seen {Set} 已经被读取过的属性
+ */
+function traverse(value, seen = new Set()) {
+  if (typeof value !== 'object' || value === null || seen.has(value)) {
+    return value
+  }
+  seen.add(value)
+  for (const key in value) {
+    traverse(value[key], seen)
+  }
+
+  return value
+}
+```
+
+首先定义一个函数 `traverse()`，用来递归读取响应式数据的所有属性，这里借助一个集合 `seen`，用来记录已经读取过的属性。然后注册副作用函数，副作用函数就是 `traverse()`，并定义调度函数 `scheduler()`，用于执行回调函数。
+
+**getter 函数**
+
+Vue 3 中 `watch` 除了监听响应式数据，还支持 getter 函数，为此，我们修改之前的代码：
+
+```diff
+  function watch(source, cb) {
++   let getter
++   if (typeof source === 'function') {
++     getter = source
++   } else {
++     getter = () => traverse(source)
++   }
+    const effect = new ReactiveEffect(
+-     () => traverse(source),
++     getter
+      () => {
+        cb()
+      }
+    )
+    effect.run()
+  }
+```
+
+如果传入的 `source` 是 getter 函数，则直接注册为副作用函数，否则通过 `traverse()` 函数读取响应式数据的属性。
+
+**获取旧值和新值**
+
+调度函数 `scheduler()` 目前只执行回调函数，为了在回调函数中获取 `newValue` 和 `oldValue`，我们需要修改 `scheduler()` 调度函数：
+
+```diff
+  function watch(source, cb) {
+    let getter
+    if (typeof source === 'function') {
+      getter = source
+    } else {
+      getter = () => traverse(source)
+    }
++   let oldValue, newValue
++   const scheduler = function () {
++     newValue = this.run()
++     cb(newValue, oldValue)
++     oldValue = newValue
++   }
+-   const effect = new ReactiveEffect(getter, () => {
+-     cb()
+-   })
+-   effect.run()
++   const effect = new ReactiveEffect(getter, scheduler)
++   oldValue = effect.run()
+  }
+```
+
+```js
+const obj = reactive({ count: 0 })
+watch(
+  () => obj.count,
+  (newValue, oldValue) => {
+    console.log(oldValue, newValue)
+  }
+)
+
+obj.count++
+```
+
+定义 `oldValue` 和 `newValue` 这两个变量，注册副作用函数时，副作用函数的执行结果即为旧值，当修改响应式数据时，触发调度函数，此时再次执行副作用函数，结果即为新值，并将新值和旧值传给回调函数，回调函数执行后，将新值赋值给旧值。
+
+## 10. watch immediate
+
+Vue 3 中，`watch` 支持传入一个 `immediate` 属性，用于指定回调函数是否立即执行，我们只需要注册副作用函数后，执行调度函数即可。
+
+```diff
+- function watch(source, cb) {
++ function watch(source, cb, { immediate } = {}) {
+    let getter
+    if (typeof source === 'function') {
+      // 传 getter 函数
+      getter = source
+    } else {
+      // 传响应式对象，读取对象的属性
+      getter = () => traverse(source)
+    }
+    let oldValue, newValue
+    // 注册副作用函数
+    const scheduler = function () {
+      newValue = this.run()
+      cb(newValue, oldValue)
+      oldValue = newValue
+    }
+    const effect = new ReactiveEffect(getter, scheduler)
++   if (immediate) {
++     effect.scheduler()
++   } else {
+      oldValue = effect.run()
++   }
+  }
+```
+
+```js
+const obj = reactive({ count: 0 })
+watch(
+  obj,
+  () => {
+    console.log(obj.count)
+  },
+  { immediate: true }
+)
+
+obj.count++
+```
+
+[第 3 章 权衡的艺术 ↑](./第3章%20Vue.js%203%20的设计思路.md)
